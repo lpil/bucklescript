@@ -14977,9 +14977,11 @@ module Ast_utf8_string_interp : sig
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA. *)
 
 
-type kind =
+
+ type kind =
   | String
-  | Var
+  | VarNoParen (* int records its border length *)
+  | VarParen 
 type error = private
   | Invalid_code_point
   | Unterminated_backslash
@@ -15054,10 +15056,11 @@ type error =
   | Unterminated_variable
   | Unmatched_paren
   | Invalid_syntax_of_var of string 
+
 type kind =
   | String
-  | Var
-
+  | VarNoParen
+  | VarParen
 
 (** Note the position is about code point *)
 type pos = { 
@@ -15176,7 +15179,7 @@ let pos_error cxt ~loc error =
            (cxt.segment_start,
             { lnum = cxt.pos_lnum ; offset = loc - cxt.pos_bol ; byte_bol = cxt.byte_bol}, error))
 
-let add_var_segment cxt loc  = 
+let add_var_segment cxt loc  b = 
   let content =  Buffer.contents cxt.buf in
   Buffer.clear cxt.buf ;
   let next_loc = {
@@ -15187,7 +15190,7 @@ let add_var_segment cxt loc  =
       cxt.segments <- 
         { start = cxt.segment_start; 
           finish =  next_loc ;
-          kind = Var; 
+          kind = (if b then VarParen else VarNoParen ); 
           content} :: cxt.segments ;
       cxt.segment_start <- next_loc
     end
@@ -15280,7 +15283,7 @@ and expect_simple_var  loc  s offset ({buf; s_len} as cxt) =
       done;
       let added_length = !v - offset in
       let loc = added_length + loc in 
-      add_var_segment cxt loc  ; 
+      add_var_segment cxt loc false ; 
       check_and_transform loc  s (added_length + offset) cxt
     end
 and expect_var_paren  loc  s offset ({buf; s_len} as cxt) =
@@ -15295,7 +15298,7 @@ and expect_var_paren  loc  s offset ({buf; s_len} as cxt) =
   let loc = added_length +  1 + loc  in
   if !v < s_len && s.[!v] = ')' then
     begin 
-      add_var_segment cxt loc ; 
+      add_var_segment cxt loc true ; 
       check_and_transform loc  s (added_length + 1 + offset) cxt 
     end
   else
@@ -15394,7 +15397,7 @@ open Ast_helper
 
 (** Longident.parse "Pervasives.^" *)
 let concat_ident  : Longident.t = 
-  Ldot (Lident "Pervasives", "^")
+  Ldot (Lident "Pervasives", "^") (* FIXME: remove deps on `Pervasives` *)
    (* JS string concatMany *)
     (* Ldot (Ldot (Lident "Js", "String"), "concat") *)
 
@@ -15420,14 +15423,20 @@ let border = String.length "{j|"
 let aux loc (segment : segment) =  
   match segment with 
   | {start ; finish; kind ; content} 
-    -> 
-    let loc = update border start finish  loc in 
+    ->     
     begin match kind with 
-      | String -> 
+      | String ->         
+        let loc = update border start finish  loc  in 
         Exp.constant 
           ~loc
           (Const_string (content, escaped)) 
-      | Var -> 
+      | VarNoParen 
+      | VarParen -> 
+        let loc = {
+          loc with 
+          loc_start = update_position border start loc.loc_start ;
+          loc_end = update_position border finish loc.loc_start
+        } in 
         Exp.apply ~loc 
           (Exp.ident ~loc {loc ; txt = to_string_ident })
           [
@@ -15551,7 +15560,7 @@ let suites =
           "hie $x hi 你好" ==~
             [
               0,4, String, "hie ";
-              4,6, Var, "x";
+              4,6, VarNoParen, "x";
               6,12,String, " hi 你好"
             ]
         end;
@@ -15571,7 +15580,7 @@ let suites =
         __LOC__ >:: begin fun _ ->
           "你好$x" ==~
           [0,2,String, "你好";
-           2,4,Var, "x";
+           2,4,VarNoParen, "x";
 
           ]
         end
@@ -15580,7 +15589,7 @@ let suites =
           "你好$this" ==~
           [
             0,2,String, "你好";
-            2,7,Var, "this";
+            2,7,VarNoParen, "this";
           ]
         end
         ;
@@ -15588,31 +15597,31 @@ let suites =
           "你好$(this)" ==~
           [
             0,2,String, "你好";
-            2,9,Var, "this"
+            2,9,VarParen, "this"
           ];
 
           "你好$this)" ==~
           [
              0,2,String, "你好";
-             2,7,Var, "this";
+             2,7,VarNoParen, "this";
              7,8,String,")"
           ];
           {|\xff\xff你好 $x |} ==~
           [
             0,11,String, {|\xff\xff你好 |};
-            11,13, Var, "x";
+            11,13, VarNoParen, "x";
             13,14, String, " "
           ];
           {|\xff\xff你好 $x 不吃亏了buckle $y $z = $sum|}
           ==~
           [(0, 11, String,{|\xff\xff你好 |} );
-           (11, 13, Var, "x");
+           (11, 13, VarNoParen, "x");
            (13, 25, String,{| 不吃亏了buckle |} );
-           (25, 27, Var, "y");
+           (25, 27, VarNoParen, "y");
            (27, 28, String, " ");
-           (28, 30, Var, "z");
+           (28, 30, VarNoParen, "z");
            (30, 33, String, " = ");
-           (33, 37, Var, "sum");
+           (33, 37, VarNoParen, "sum");
            ]
         end
         ;
@@ -15620,7 +15629,7 @@ let suites =
           "你好 $(this_is_a_var)  x" ==~
           [
             0,3,String, "你好 ";
-            3,19,Var, "this_is_a_var";
+            3,19,VarParen, "this_is_a_var";
             19,22, String, "  x"
           ]
         end
@@ -15630,17 +15639,17 @@ let suites =
         "hi\n$x\n" ==*
         [
           0,0,1,0,String, "hi\\n";
-          1,0,1,2,Var, "x" ;
+          1,0,1,2,VarNoParen, "x" ;
           1,2,2,0,String,"\\n"
         ];
         "$x" ==*
-        [0,0,0,2,Var,"x"];
+        [0,0,0,2,VarNoParen,"x"];
         
 
         "\n$x\n" ==*
         [
           0,0,1,0,String,"\\n";
-          1,0,1,2,Var,"x";
+          1,0,1,2,VarNoParen,"x";
           1,2,2,0,String,"\\n"
         ]
         end;
@@ -15649,7 +15658,7 @@ let suites =
         "\n$(x_this_is_cool) " ==*
         [
           0,0,1,0,String, "\\n";
-          1,0,1,17,Var, "x_this_is_cool";
+          1,0,1,17,VarParen, "x_this_is_cool";
           1,17,1,18,String, " "
         ]
         end;
@@ -15657,11 +15666,11 @@ let suites =
         " $x + $y = $sum " ==*
         [
           0,0,0,1,String , " ";
-          0,1,0,3,Var, "x";
+          0,1,0,3,VarNoParen, "x";
           0,3,0,6,String, " + ";
-          0,6,0,8,Var, "y";
+          0,6,0,8,VarNoParen, "y";
           0,8,0,11,String, " = ";
-          0,11,0,15,Var, "sum";
+          0,11,0,15,VarNoParen, "sum";
           0,15,0,16,String, " "
         ]
         end;
@@ -15669,7 +15678,7 @@ let suites =
         "中文 | $a " ==*
         [
           0,0,0,5,String, "中文 | ";
-          0,5,0,7,Var, "a";
+          0,5,0,7,VarNoParen, "a";
           0,7,0,8,String, " "
         ]
         end
@@ -15678,14 +15687,14 @@ let suites =
           {|Hello \\$world|} ==*
           [
             0,0,0,8,String,"Hello \\\\";
-            0,8,0,14,Var, "world"
+            0,8,0,14,VarNoParen, "world"
           ]
         end
         ;
         __LOC__ >:: begin fun _ -> 
           {|$x)|} ==*
           [
-            0,0,0,2,Var,"x";
+            0,0,0,2,VarNoParen,"x";
             0,2,0,3,String,")"
           ]
         end;
