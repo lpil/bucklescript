@@ -407,10 +407,12 @@ let aux loc (segment : segment) =
           (Const_string (content, escaped)) 
       | VarNoParen 
       | VarParen -> 
+        let soffset = if kind = VarParen then 2 else 1 in 
+        let foffset = if kind = VarParen then -1 else 0 in  
         let loc = {
           loc with 
-          loc_start = update_position border start loc.loc_start ;
-          loc_end = update_position border finish loc.loc_start
+          loc_start = update_position  (soffset + border) start loc.loc_start ;
+          loc_end = update_position (foffset + border) finish loc.loc_start
         } in 
         Exp.apply ~loc 
           (Exp.ident ~loc {loc ; txt = to_string_ident })
